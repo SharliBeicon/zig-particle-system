@@ -21,7 +21,9 @@ const Kind = enum {
     Air,
     Ground,
     Sand,
+    Water,
 };
+var selected_kind: Kind = .Sand;
 
 pub fn main() !void {
     rl.setTraceLogLevel(.log_info);
@@ -42,6 +44,12 @@ pub fn main() !void {
 
     rl.setTargetFPS(60);
     while (!rl.windowShouldClose()) {
+        switch (rl.getKeyPressed()) {
+            .key_one => selected_kind = .Sand,
+            .key_two => selected_kind = .Water,
+            else => {},
+        }
+
         try updateParticles(&particles);
         defer resetUpdatedParticles(&particles);
 
@@ -60,6 +68,15 @@ pub fn main() !void {
                             PARTICLE_SIZE,
                             PARTICLE_SIZE,
                             rl.Color{ .r = 203, .g = 189, .b = 147, .a = 255 },
+                        );
+                    },
+                    .Water => {
+                        rl.drawRectangle(
+                            @intCast(i * PARTICLE_SIZE),
+                            @intCast(j * PARTICLE_SIZE),
+                            PARTICLE_SIZE,
+                            PARTICLE_SIZE,
+                            rl.Color{ .r = 35, .g = 137, .b = 218, .a = 255 },
                         );
                     },
                     else => {
@@ -91,6 +108,9 @@ fn updateParticles(particles: *[GRID_WIDTH][GRID_HEIGHT]Particle) !void {
                 switch (particles[x][y].kind) {
                     .Sand => {
                         computeSandMovement(particles, x, y);
+                    },
+                    .Water => {
+                        computeWaterMovement(particles, x, y);
                     },
                     else => {},
                 }
@@ -137,7 +157,7 @@ fn spawnNewParticles(particles: *[GRID_WIDTH][GRID_HEIGHT]Particle) void {
             // Only spawn if the cell is empty
             if (particles[x][y].kind == .Air) {
                 particles[x][y] = Particle{
-                    .kind = .Sand,
+                    .kind = selected_kind,
                     .speed = 0.5,
                     .life_time = rl.getTime(),
                     .updated = false,
@@ -148,6 +168,67 @@ fn spawnNewParticles(particles: *[GRID_WIDTH][GRID_HEIGHT]Particle) void {
 }
 
 fn computeSandMovement(particles: *[GRID_WIDTH][GRID_HEIGHT]Particle, x: usize, y: usize) void {
+    // Compute new particle speed because of G
+    particles[x][y].speed += @floatCast(GRAVITY * (rl.getTime() - particles[x][y].life_time));
+    if (particles[x][y].speed > MAX_SPEED) {
+        particles[x][y].speed = MAX_SPEED;
+    }
+    const steps: usize = @intFromFloat(@round(particles[x][y].speed));
+
+    var current_y = y;
+    for (0..steps) |step| {
+        current_y += step;
+        // Check if we can move down
+        if (current_y < GRID_HEIGHT - 1 and (particles[x][current_y + 1].kind == .Air or particles[x][current_y + 1].kind == .Water)) {
+            // Move down
+            const current_kind = particles[x][current_y + 1].kind;
+            particles[x][current_y + 1] = particles[x][current_y];
+            particles[x][current_y + 1].updated = true;
+            particles[x][current_y] = Particle{
+                .kind = current_kind,
+                .speed = 0,
+                .life_time = rl.getTime(),
+                .updated = false,
+            };
+        } else if (current_y < GRID_HEIGHT - 1) {
+            // Try to move diagonally
+            if (x > 0 and (particles[x - 1][current_y + 1].kind == .Air or particles[x - 1][current_y + 1].kind == .Water)) {
+                // Move down-left
+                const current_kind = particles[x - 1][current_y + 1].kind;
+                particles[x - 1][current_y + 1] = particles[x][current_y];
+                particles[x - 1][current_y + 1].updated = true;
+                particles[x][current_y] = Particle{
+                    .kind = current_kind,
+                    .speed = 0,
+                    .life_time = rl.getTime(),
+                    .updated = false,
+                };
+            } else if (x < GRID_WIDTH - 1 and (particles[x + 1][current_y + 1].kind == .Air or particles[x + 1][current_y + 1].kind == .Water)) {
+                // Move down-right
+                const current_kind = particles[x + 1][current_y + 1].kind;
+                particles[x + 1][current_y + 1] = particles[x][current_y];
+                particles[x + 1][current_y + 1].updated = true;
+                particles[x][current_y] = Particle{
+                    .kind = current_kind,
+                    .speed = 0,
+                    .life_time = rl.getTime(),
+                    .updated = false,
+                };
+            } else {
+                particles[x][y].speed = 0;
+                particles[x][y].updated = true;
+                particles[x][y].life_time = rl.getTime();
+                break;
+            }
+        } else {
+            particles[x][y].speed = 0;
+            particles[x][y].updated = true;
+            particles[x][y].life_time = rl.getTime();
+            break;
+        }
+    }
+}
+fn computeWaterMovement(particles: *[GRID_WIDTH][GRID_HEIGHT]Particle, x: usize, y: usize) void {
     // Compute new particle speed because of G
     particles[x][y].speed += @floatCast(GRAVITY * (rl.getTime() - particles[x][y].life_time));
     if (particles[x][y].speed > MAX_SPEED) {
@@ -171,21 +252,47 @@ fn computeSandMovement(particles: *[GRID_WIDTH][GRID_HEIGHT]Particle, x: usize, 
                 .updated = false,
             };
         } else if (current_y < GRID_HEIGHT - 1) {
-            // Try to move diagonally
-            if (x > 0 and particles[x - 1][current_y + 1].kind == .Air) {
-                // Move down-left
-                particles[x - 1][current_y + 1] = particles[x][current_y];
-                particles[x - 1][current_y + 1].updated = true;
+            // Try to move diagonally or horizontally
+            const can_move_down_left = x > 0 and particles[x - 1][current_y + 1].kind == .Air;
+            const can_move_down_right = x < GRID_WIDTH - 1 and particles[x + 1][current_y + 1].kind == .Air;
+            const can_move_left = x > 0 and particles[x - 1][current_y].kind == .Air;
+            const can_move_right = x < GRID_WIDTH - 1 and particles[x + 1][current_y].kind == .Air;
+
+            // First priority: Move diagonally down if possible
+            if (can_move_down_left or can_move_down_right) {
+                const move_left = if (can_move_down_left and can_move_down_right)
+                    rl.getRandomValue(0, 1) == 0
+                else
+                    can_move_down_left;
+
+                if (move_left) {
+                    particles[x - 1][current_y + 1] = particles[x][current_y];
+                    particles[x - 1][current_y + 1].updated = true;
+                } else {
+                    particles[x + 1][current_y + 1] = particles[x][current_y];
+                    particles[x + 1][current_y + 1].updated = true;
+                }
                 particles[x][current_y] = Particle{
                     .kind = .Air,
                     .speed = 0,
                     .life_time = rl.getTime(),
                     .updated = false,
                 };
-            } else if (x < GRID_WIDTH - 1 and particles[x + 1][current_y + 1].kind == .Air) {
-                // Move down-right
-                particles[x + 1][current_y + 1] = particles[x][current_y];
-                particles[x + 1][current_y + 1].updated = true;
+            }
+            // Second priority: Move horizontally if possible
+            else if (can_move_left or can_move_right) {
+                const move_left = if (can_move_left and can_move_right)
+                    rl.getRandomValue(0, 1) == 0
+                else
+                    can_move_left;
+
+                if (move_left) {
+                    particles[x - 1][current_y] = particles[x][current_y];
+                    particles[x - 1][current_y].updated = true;
+                } else {
+                    particles[x + 1][current_y] = particles[x][current_y];
+                    particles[x + 1][current_y].updated = true;
+                }
                 particles[x][current_y] = Particle{
                     .kind = .Air,
                     .speed = 0,
