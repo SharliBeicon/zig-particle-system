@@ -7,6 +7,7 @@ const GRAVITY = 0.5;
 const PARTICLE_SIZE = 5;
 const MAX_PARTICLES = WIDTH * HEIGHT;
 const MAX_SPEED = 10;
+const HORIZONTAL_SPEED = 10;
 const GRID_WIDTH = WIDTH / PARTICLE_SIZE;
 const GRID_HEIGHT = HEIGHT / PARTICLE_SIZE;
 
@@ -30,6 +31,13 @@ pub fn main() !void {
     rl.initWindow(WIDTH, HEIGHT, "Sand");
     defer rl.closeWindow();
 
+    var prng = std.rand.DefaultPrng.init(blk: {
+        var seed: u64 = undefined;
+        try std.posix.getrandom(std.mem.asBytes(&seed));
+        break :blk seed;
+    });
+    const rand = prng.random();
+
     var particles: [GRID_WIDTH][GRID_HEIGHT]Particle = undefined;
     for (particles, 0..) |_, i| {
         for (particles[i], 0..) |_, j| {
@@ -50,7 +58,7 @@ pub fn main() !void {
             else => {},
         }
 
-        try updateParticles(&particles);
+        try updateParticles(&particles, rand);
         defer resetUpdatedParticles(&particles);
 
         rl.beginDrawing();
@@ -95,24 +103,32 @@ pub fn main() !void {
     }
 }
 
-fn updateParticles(particles: *[GRID_WIDTH][GRID_HEIGHT]Particle) !void {
+fn updateParticles(particles: *[GRID_WIDTH][GRID_HEIGHT]Particle, rand: std.Random) !void {
     spawnNewParticles(particles);
-
-    // Update existing particles from bottom to top
     var row: usize = GRID_HEIGHT;
     while (row > 0) : (row -= 1) {
         const y = row - 1;
-        var x: usize = 0;
-        while (x < GRID_WIDTH) : (x += 1) {
-            if (!particles[x][y].updated) {
-                switch (particles[x][y].kind) {
-                    .Sand => {
-                        computeSandMovement(particles, x, y);
-                    },
-                    .Water => {
-                        computeWaterMovement(particles, x, y);
-                    },
-                    else => {},
+
+        if (rand.boolean()) {
+            var x: usize = 0;
+            while (x < GRID_WIDTH) : (x += 1) {
+                if (!particles[x][y].updated) {
+                    switch (particles[x][y].kind) {
+                        .Sand => computeSandMovement(particles, x, y),
+                        .Water => computeWaterMovement(particles, x, y, rand),
+                        else => {},
+                    }
+                }
+            }
+        } else {
+            var x: usize = GRID_WIDTH - 1;
+            while (x > 0) : (x -= 1) {
+                if (!particles[x][y].updated) {
+                    switch (particles[x][y].kind) {
+                        .Sand => computeSandMovement(particles, x, y),
+                        .Water => computeWaterMovement(particles, x, y, rand),
+                        else => {},
+                    }
                 }
             }
         }
@@ -228,7 +244,7 @@ fn computeSandMovement(particles: *[GRID_WIDTH][GRID_HEIGHT]Particle, x: usize, 
         }
     }
 }
-fn computeWaterMovement(particles: *[GRID_WIDTH][GRID_HEIGHT]Particle, x: usize, y: usize) void {
+fn computeWaterMovement(particles: *[GRID_WIDTH][GRID_HEIGHT]Particle, x: usize, y: usize, rand: std.Random) void {
     // Compute new particle speed because of G
     particles[x][y].speed += @floatCast(GRAVITY * (rl.getTime() - particles[x][y].life_time));
     if (particles[x][y].speed > MAX_SPEED) {
@@ -239,7 +255,6 @@ fn computeWaterMovement(particles: *[GRID_WIDTH][GRID_HEIGHT]Particle, x: usize,
     var current_y = y;
     for (0..steps) |step| {
         current_y += step;
-
         // Check if we can move down
         if (current_y < GRID_HEIGHT - 1 and particles[x][current_y + 1].kind == .Air) {
             // Move down
@@ -258,10 +273,16 @@ fn computeWaterMovement(particles: *[GRID_WIDTH][GRID_HEIGHT]Particle, x: usize,
             const can_move_left = x > 0 and particles[x - 1][current_y].kind == .Air;
             const can_move_right = x < GRID_WIDTH - 1 and particles[x + 1][current_y].kind == .Air;
 
+            // Check for adjacent water particles
+            const has_water_left = x > 0 and particles[x - 1][current_y].kind == .Water;
+            const has_water_right = x < GRID_WIDTH - 1 and particles[x + 1][current_y].kind == .Water;
+            const has_water_below = current_y < GRID_HEIGHT - 1 and particles[x][current_y + 1].kind == .Water;
+            const is_touching_water = has_water_left or has_water_right or has_water_below;
+
             // First priority: Move diagonally down if possible
             if (can_move_down_left or can_move_down_right) {
                 const move_left = if (can_move_down_left and can_move_down_right)
-                    rl.getRandomValue(0, 1) == 0
+                    rand.boolean()
                 else
                     can_move_down_left;
 
@@ -282,28 +303,50 @@ fn computeWaterMovement(particles: *[GRID_WIDTH][GRID_HEIGHT]Particle, x: usize,
             // Second priority: Move horizontally if possible
             else if (can_move_left or can_move_right) {
                 const move_left = if (can_move_left and can_move_right)
-                    rl.getRandomValue(0, 1) == 0
+                    rand.boolean()
                 else
                     can_move_left;
 
+                // Determine how far to spread based on whether touching water
+                const spread_distance: usize = if (is_touching_water) 5 else 1;
+
                 if (move_left) {
-                    particles[x - 1][current_y] = particles[x][current_y];
-                    particles[x - 1][current_y].updated = true;
+                    var current_x = x;
+                    var steps_taken: usize = 0;
+                    while (current_x > 0 and steps_taken < spread_distance) : (steps_taken += 1) {
+                        if (particles[current_x - 1][current_y].kind == .Air) {
+                            particles[current_x - 1][current_y] = particles[current_x][current_y];
+                            particles[current_x - 1][current_y].updated = true;
+                            particles[current_x][current_y] = Particle{
+                                .kind = .Air,
+                                .speed = 0,
+                                .life_time = rl.getTime(),
+                                .updated = false,
+                            };
+                            current_x -= 1;
+                        } else break;
+                    }
                 } else {
-                    particles[x + 1][current_y] = particles[x][current_y];
-                    particles[x + 1][current_y].updated = true;
+                    var current_x = x;
+                    var steps_taken: usize = 0;
+                    while (current_x < GRID_WIDTH - 1 and steps_taken < spread_distance) : (steps_taken += 1) {
+                        if (particles[current_x + 1][current_y].kind == .Air) {
+                            particles[current_x + 1][current_y] = particles[current_x][current_y];
+                            particles[current_x + 1][current_y].updated = true;
+                            particles[current_x][current_y] = Particle{
+                                .kind = .Air,
+                                .speed = 0,
+                                .life_time = rl.getTime(),
+                                .updated = false,
+                            };
+                            current_x += 1;
+                        } else break;
+                    }
                 }
-                particles[x][current_y] = Particle{
-                    .kind = .Air,
-                    .speed = 0,
-                    .life_time = rl.getTime(),
-                    .updated = false,
-                };
-            } else {
-                particles[x][y].speed = 0;
-                particles[x][y].life_time = rl.getTime();
-                break;
             }
+            particles[x][y].speed = 0;
+            particles[x][y].life_time = rl.getTime();
+            break;
         } else {
             particles[x][y].speed = 0;
             particles[x][y].life_time = rl.getTime();
