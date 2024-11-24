@@ -60,8 +60,7 @@ pub fn main() !void {
                             @intCast(j * PARTICLE_SIZE),
                             PARTICLE_SIZE,
                             PARTICLE_SIZE,
-                            // rl.Color{ .r = 203, .g = 189, .b = 147, .a = 255 },
-                            rl.Color.black,
+                            rl.Color{ .r = 203, .g = 189, .b = 147, .a = 255 },
                         );
                     },
                     else => {
@@ -70,8 +69,7 @@ pub fn main() !void {
                             @intCast(j * PARTICLE_SIZE),
                             PARTICLE_SIZE,
                             PARTICLE_SIZE,
-                            // rl.Color{ .r = 130, .g = 200, .b = 229, .a = 255 },
-                            rl.Color.white,
+                            rl.Color.dark_gray,
                         );
                     },
                 }
@@ -82,27 +80,50 @@ pub fn main() !void {
 }
 
 fn updateParticles(particles: *[GRID_WIDTH][GRID_HEIGHT]Particle, delta: *f64) !void {
-    // Spawn new sand particles
+    // Spawn new sand particles with random spread
     if (rl.isMouseButtonDown(.mouse_button_left)) {
-        const x: usize = @intCast(if (@divFloor(rl.getMouseX(), PARTICLE_SIZE) < 0)
-            0
-        else
-            @divFloor(rl.getMouseX(), PARTICLE_SIZE));
-        const y: usize = @intCast(if (@divFloor(rl.getMouseY(), PARTICLE_SIZE) < 0)
-            0
-        else
-            @divFloor(rl.getMouseY(), PARTICLE_SIZE));
+        const mouseX = rl.getMouseX();
+        const mouseY = rl.getMouseY();
 
-        if (x >= GRID_WIDTH or y >= GRID_HEIGHT) {
-            return;
+        // Spawn multiple particles per click/frame
+        var i: usize = 0;
+        const particles_per_click = 3;
+        const spread_radius = 10;
+
+        while (i < particles_per_click) : (i += 1) {
+            // Generate random offset from mouse position
+            const offsetX = rl.getRandomValue(-spread_radius, spread_radius);
+            const offsetY = rl.getRandomValue(-spread_radius, spread_radius);
+
+            // Calculate final position with offset
+            const finalX = mouseX + offsetX;
+            const finalY = mouseY + offsetY;
+
+            // Convert to grid coordinates
+            const x: usize = @intCast(if (@divFloor(finalX, PARTICLE_SIZE) < 0)
+                0
+            else
+                @divFloor(finalX, PARTICLE_SIZE));
+            const y: usize = @intCast(if (@divFloor(finalY, PARTICLE_SIZE) < 0)
+                0
+            else
+                @divFloor(finalY, PARTICLE_SIZE));
+
+            // Check bounds
+            if (x >= GRID_WIDTH or y >= GRID_HEIGHT) {
+                continue;
+            }
+
+            // Only spawn if the cell is empty
+            if (particles[x][y].kind == .Air) {
+                particles[x][y] = Particle{
+                    .kind = .Sand,
+                    .speed = 0.5,
+                    .life_time = rl.getTime(),
+                    .updated = false,
+                };
+            }
         }
-
-        particles[x][y] = Particle{
-            .kind = .Sand,
-            .speed = 0.5,
-            .life_time = rl.getTime(),
-            .updated = false,
-        };
         delta.* = rl.getTime();
     }
 
@@ -157,7 +178,15 @@ fn updateParticles(particles: *[GRID_WIDTH][GRID_HEIGHT]Particle, delta: *f64) !
                                 .life_time = rl.getTime(),
                                 .updated = false,
                             };
+                        } else {
+                            particles[x][y].speed = 0;
+                            particles[x][y].life_time = rl.getTime();
+                            break;
                         }
+                    } else {
+                        particles[x][y].speed = 0;
+                        particles[x][y].life_time = rl.getTime();
+                        break;
                     }
                 }
             }
